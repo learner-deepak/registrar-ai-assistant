@@ -13,3 +13,8 @@ chromadb
 
 # Utilities
 python-dotenv
+
+# Document Parsing
+pypdf
+docx2txt
+beautifulsoup4
