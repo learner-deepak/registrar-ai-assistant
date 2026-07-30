@@ -1,0 +1,25 @@
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data & DBs
+data/
+*.sqlite3
+chroma_db/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Frontend
+node_modules/
+dist/
+build/
