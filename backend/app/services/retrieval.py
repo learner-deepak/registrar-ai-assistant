@@ -4,48 +4,58 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from app.db.vector_store import get_vector_store
-from langchain.retrievers import EnsembleRetriever
 from langchain_community.retrievers import BM25Retriever
+from langchain_core.documents import Document
 
 def perform_search(query: str, k: int = 5):
     """
     Performs a Hybrid Search using both Vector (Chroma) and Keyword (BM25) search.
-    Returns a combined, deduplicated, and re-ranked list of top document chunks.
+    Fuses the results using a custom Reciprocal Rank Fusion (RRF) algorithm to 
+    completely bypass LangChain's broken dependency.
     """
     db = get_vector_store()
     
-    # 1. Setup the Vector Retriever (Semantic Meaning)
+    # 1. Fetch Vector Search Results (Chroma)
     vector_retriever = db.as_retriever(search_kwargs={"k": k})
+    vector_docs = vector_retriever.invoke(query)
     
-    # 2. Setup the BM25 Retriever (Keyword/Alphanumeric Matching)
-    # We load the docs directly from the vector store's underlying collection to build the BM25 index
+    # 2. Setup & Fetch BM25 Keyword Search Results
     collection_data = db.get()
-    
-    # Reconstruct the documents so Langchain's BM25 wrapper can read them
-    from langchain_core.documents import Document
     bm25_docs = [
         Document(page_content=text, metadata=meta) 
         for text, meta in zip(collection_data["documents"], collection_data["metadatas"])
     ]
-    
     bm25_retriever = BM25Retriever.from_documents(bm25_docs)
-    bm25_retriever.k = k  # Set number of results to fetch
+    bm25_retriever.k = k
+    keyword_docs = bm25_retriever.invoke(query)
     
-    # 3. Create the Ensemble Retriever (Hybrid Fusion)
-    # weights=[0.5, 0.5] means both vector and keyword search carry equal importance
-    ensemble_retriever = EnsembleRetriever(
-        retrievers=[vector_retriever, bm25_retriever],
-        weights=[0.5, 0.5]
-    )
+    # 3. Custom Reciprocal Rank Fusion (RRF)
+    # We manually score and merge the documents to avoid broken imports
+    rrf_scores = {}
+    doc_lookup = {}
     
-    # 4. Fetch the fused results
-    results = ensemble_retriever.invoke(query)
+    # Score Vector results
+    for rank, doc in enumerate(vector_docs):
+        content = doc.page_content
+        doc_lookup[content] = doc
+        # RRF Formula: 1 / (rank + constant)
+        rrf_scores[content] = rrf_scores.get(content, 0) + (1 / (rank + 60))
+        
+    # Score BM25 Keyword results
+    for rank, doc in enumerate(keyword_docs):
+        content = doc.page_content
+        doc_lookup[content] = doc
+        rrf_scores[content] = rrf_scores.get(content, 0) + (1 / (rank + 60))
+        
+    # Sort documents by their combined RRF score (highest to lowest)
+    reranked_docs = sorted(doc_lookup.values(), key=lambda d: rrf_scores[d.page_content], reverse=True)
     
-    return results
+    # Return the top 'k' fused results
+    return reranked_docs[:k]
 
 if __name__ == "__main__":
-    test_query = "CS-101" # A great test for hybrid search!
-    print(f"--- Testing Hybrid Search ---")
+    test_query = "CS-101" 
+    print(f"--- Testing Custom Hybrid Search ---")
     print(f"Query: {test_query}\n")
     
     docs = perform_search(test_query)
