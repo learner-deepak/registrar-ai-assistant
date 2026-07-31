@@ -20,7 +20,7 @@ def get_llm():
     """
     return ChatOpenAI(
         model="gpt-4o-mini",
-        temperature=0.0
+        temperature=0.2
     )
 
 def generate_grounded_response(query: str):
