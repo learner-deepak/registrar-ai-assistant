@@ -29,7 +29,7 @@ app.add_middleware(
 )
 
 # Calculate the exact path to your data/docs folder
-DOCS_DIR = Path(__file__).resolve().parent.parent / "data" / "docs"
+DOCS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "docs"
 
 # BULLETPROOF FIX: Force create the directories if Render's server can't find them
 DOCS_DIR.mkdir(parents=True, exist_ok=True)
