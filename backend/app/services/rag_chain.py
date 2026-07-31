@@ -10,8 +10,16 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from app.services.retrieval import perform_search
 
+# --- NEW: Import FlashRank ---
+from flashrank import Ranker, RerankRequest
+
 # Load API key from environment
 load_dotenv()
+
+# Initialize the Ranker once globally so it doesn't reload on every request
+# It will download a tiny (~30MB), highly optimized model the first time it runs
+print("Initializing FlashRank...")
+ranker = Ranker(model_name="ms-marco-TinyBERT-L-2-v2")
 
 def get_llm():
     """
@@ -25,21 +33,39 @@ def get_llm():
 
 def stream_grounded_response(query: str):
     """
-    Takes a user query, fetches context, and YIELDS a polite, friendly response token-by-token.
+    Takes a user query, fetches context, RERANKS it for precision, 
+    and YIELDS a polite, friendly response token-by-token.
     """
-    # 1. Fetch relevant chunks from ChromaDB
-    relevant_chunks = perform_search(query)
+    # 1. Fetch relevant chunks from ChromaDB (Vector Search)
+    initial_chunks = perform_search(query)
+    
+    # 2. RERANKING: Format chunks for FlashRank
+    passages = []
+    for i, doc in enumerate(initial_chunks):
+        passages.append({
+            "id": i,
+            "text": doc.page_content,
+            "meta": doc.metadata
+        })
+        
+    rerank_request = RerankRequest(query=query, passages=passages)
+    
+    # Get newly scored and sorted results
+    reranked_results = ranker.rerank(rerank_request)
+    
+    # Keep only the absolute best contexts (e.g., top 3) to save tokens and reduce hallucinations
+    best_results = reranked_results[:3]
     
     # Extract the text
-    context_text = "\n\n".join([doc.page_content for doc in relevant_chunks])
+    context_text = "\n\n".join([res["text"] for res in best_results])
     
     # Create citations and deduplicate them using set()
-    citations = list(set([doc.metadata.get("source", "Unknown Document") for doc in relevant_chunks]))
+    citations = list(set([res["meta"].get("source", "Unknown Document") for res in best_results]))
 
     # YIELD 1: Send the citations immediately before the LLM starts typing
     yield {"type": "citations", "content": citations}
 
-    # 2. Friendly System Prompt
+    # 3. Friendly System Prompt
     system_prompt = """You are a warm, highly empathetic, and proactive AI assistant for the University Registrar's Office. 
 Your primary goal is to support students, ensure they feel heard, and give them comprehensive help.
 
@@ -62,7 +88,7 @@ Context:
     llm = get_llm()
     chain = prompt | llm | StrOutputParser() 
 
-    # 3. Stream Response Token-by-Token
+    # 4. Stream Response Token-by-Token
     for chunk in chain.stream({
         "context": context_text,
         "question": query
@@ -71,7 +97,7 @@ Context:
         yield {"type": "token", "content": chunk}
 
 if __name__ == "__main__":
-    print("--- Testing OpenAI RAG Streaming Chain ---")
+    print("--- Testing OpenAI RAG Streaming Chain with Reranking ---")
     valid_query = "What is the policy for exiting the degree after 3 years?"
     print(f"Question: {valid_query}")
     
@@ -79,6 +105,5 @@ if __name__ == "__main__":
         if item["type"] == "citations":
             print(f"\nCitations: {item['content']}\nAnswer: ", end="")
         elif item["type"] == "token":
-            # Print each token exactly as it arrives without line breaks
             print(item["content"], end="", flush=True)
     print("\n")
