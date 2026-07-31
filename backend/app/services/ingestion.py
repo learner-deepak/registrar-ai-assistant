@@ -28,7 +28,7 @@ def load_single_file(file_path: Path):
         elif ext in [".docx", ".doc"]:
             loader = Docx2txtLoader(str(file_path))
         elif ext == ".csv":
-            loader = CSVLoader(str(file_path))
+            loader = CSVLoader(str(file_path), encoding="utf-8")
         elif ext in [".xlsx", ".xls"]:
             loader = UnstructuredExcelLoader(str(file_path), mode="elements")
         elif ext in [".txt", ".md"]:
@@ -45,7 +45,7 @@ def load_single_file(file_path: Path):
 
 def fetch_local_documents(folder_path: Path):
     """
-    Scans the local directory and loads all supported files.
+    Scans the local directory and subdirectories to load all supported files.
     """
     if not folder_path.exists():
         print(f"❌ Could not find folder at: {folder_path}")
@@ -54,8 +54,8 @@ def fetch_local_documents(folder_path: Path):
     print(f"📖 Scanning local folder: {folder_path}...\n")
     all_docs = []
     
-    # Iterate through all files in the folder
-    files = [f for f in folder_path.iterdir() if f.is_file()]
+    # Use rglob to recursively scan the folder and any subfolders
+    files = [f for f in folder_path.rglob("*") if f.is_file() and not f.name.startswith(".")]
     
     if not files:
         print("⚠️ No files found in the docs directory.")
@@ -71,7 +71,7 @@ def fetch_local_documents(folder_path: Path):
     return all_docs
 
 if __name__ == "__main__":
-    # Point directly to data/docs
+    # Points directly to data/docs in project root
     DOCS_FOLDER = BACKEND_DIR.parent / "data" / "docs"
 
     try:
@@ -85,7 +85,7 @@ if __name__ == "__main__":
         print("\n2. Splitting documents into text chunks...")
         chunks = split_documents_into_chunks(raw_docs, chunk_size=800, chunk_overlap=150)
 
-        print("3. Generating OpenAI embeddings and saving to ChromaDB...")
+        print("3. Generating embeddings and saving to ChromaDB...")
         add_chunks_to_database(chunks)
 
         print(f"\n🎉 SUCCESS! {len(chunks)} document chunks were vectorized and stored in ChromaDB.")
