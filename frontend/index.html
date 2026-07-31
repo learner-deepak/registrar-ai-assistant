@@ -81,43 +81,62 @@
       scrollToBottom();
     }
 
-    // Helper: Append AI Message with Citations to Chat Box
-function appendAiMessage(answer, citations = []) {
-    const msgDiv = document.createElement('div');
-    msgDiv.className = 'flex items-start space-x-3';
+    // Helper: Create an empty AI message container for live streaming
+    function createStreamingAiMessage() {
+      const msgDiv = document.createElement('div');
+      msgDiv.className = 'flex items-start space-x-3';
+      
+      msgDiv.innerHTML = `
+        <div class="w-8 h-8 rounded-full bg-[#0693e3] text-white flex items-center justify-center text-sm font-bold">AI</div>
+        <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 max-w-lg w-full">
+            <p class="text-gray-800 text-sm leading-relaxed whitespace-pre-wrap ai-text-content"></p>
+            <div class="ai-citations-content mt-3 hidden"></div>
+        </div>
+      `;
+      chatBox.appendChild(msgDiv);
+      scrollToBottom();
 
-    let citationsHtml = "";
-    
-    
-    if (citations && citations.length > 0) {
-        citationsHtml = "<div class='sources-container' style='margin-top: 15px;'><strong>SOURCES:</strong><br>";
+      // Return references to the DOM elements so we can update them directly
+      return {
+        textElement: msgDiv.querySelector('.ai-text-content'),
+        citationsElement: msgDiv.querySelector('.ai-citations-content')
+      };
+    }
 
-        // 1. Clean the file names AND remove duplicates instantly using a Set
+    // Helper: Render Citations into a specific container
+    function renderCitations(citations, containerElement) {
+        if (!citations || citations.length === 0) return;
+
+        let citationsHtml = "<div class='sources-container'><strong>SOURCES:</strong><br>";
+        
+        // Clean the file names AND remove duplicates
         const uniqueFiles = [...new Set(citations.map(raw => raw.split('\\').pop().split('/').pop()))];
 
-        // 2. Loop through the cleaned, unique list to draw the buttons
         uniqueFiles.forEach(cleanFileName => {
             const fileUrl = `https://registrar-ai-assistant.onrender.com/files/${encodeURIComponent(cleanFileName)}`;
-            
             citationsHtml += `<a href="${fileUrl}" target="_blank" style="display: inline-block; background-color: #e0f2fe; color: #0284c7; padding: 6px 12px; margin: 4px 4px 0 0; border-radius: 4px; text-decoration: none; font-size: 0.85em; border: 1px solid #bae6fd;">
                 📄 ${cleanFileName}
             </a>`;
         });
         
         citationsHtml += "</div>";
+        containerElement.innerHTML = citationsHtml;
+        containerElement.classList.remove('hidden'); // Make it visible
     }
 
-    msgDiv.innerHTML = `
-    <div class="w-8 h-8 rounded-full bg-[#0693e3] text-white flex items-center justify-center text-sm font-bold">AI</div>
-    <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 max-w-lg">
-        <p class="text-gray-800 text-sm leading-relaxed">${escapeHtml(answer)}</p>
-        ${citationsHtml}
-    </div>
-    `;
-
-    chatBox.appendChild(msgDiv);
-    scrollToBottom();
-}
+    // Helper: Append a standalone Error message
+    function appendErrorMessage(text) {
+        const msgDiv = document.createElement('div');
+        msgDiv.className = 'flex items-start space-x-3';
+        msgDiv.innerHTML = `
+            <div class="w-8 h-8 rounded-full bg-red-500 text-white flex items-center justify-center text-sm font-bold">!</div>
+            <div class="bg-red-50 p-4 rounded-lg shadow-sm border border-red-200 max-w-lg text-red-700 text-sm">
+                ${escapeHtml(text)}
+            </div>
+        `;
+        chatBox.appendChild(msgDiv);
+        scrollToBottom();
+    }
 
     // Helper: Append Loading Spinner
     function appendLoadingIndicator() {
@@ -130,7 +149,7 @@ function appendAiMessage(answer, citations = []) {
           <div class="w-2 h-2 bg-[#0693e3] rounded-full animate-bounce"></div>
           <div class="w-2 h-2 bg-[#0693e3] rounded-full animate-bounce [animation-delay:-0.15s]"></div>
           <div class="w-2 h-2 bg-[#0693e3] rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-          <span class="text-xs text-gray-500 ml-2">Searching guidelines...</span>
+          <span class="text-xs text-gray-500 ml-2">Thinking...</span>
         </div>
       `;
       chatBox.appendChild(loadingDiv);
@@ -152,7 +171,7 @@ function appendAiMessage(answer, citations = []) {
       return div.innerHTML;
     }
 
-    // Handle Form Submission
+    // Handle Form Submission (Updated for SSE Streaming)
     chatForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const query = userInput.value.trim();
@@ -176,12 +195,62 @@ function appendAiMessage(answer, citations = []) {
           throw new Error(`Server returned status code ${response.status}`);
         }
 
-        const data = await response.json();
-        appendAiMessage(data.answer, data.citations);
+        // Initialize the empty streaming UI elements
+        const { textElement, citationsElement } = createStreamingAiMessage();
+        
+        // Setup stream reader
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        
+        let fullAnswer = "";
+        let savedCitations = [];
+
+        // Read chunks as they arrive
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+
+            // Decode the chunk into text and split by SSE formatting
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split("\n\n");
+
+            for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                    const dataStr = line.replace("data: ", "").trim();
+
+                    // Check if stream is finished
+                    if (dataStr === "[DONE]") {
+                        if (savedCitations.length > 0) {
+                            renderCitations(savedCitations, citationsElement);
+                            scrollToBottom();
+                        }
+                        break;
+                    }
+
+                    try {
+                        const parsed = JSON.parse(dataStr);
+
+                        if (parsed.type === "citations") {
+                            // Save citations to render at the end
+                            savedCitations = parsed.content;
+                        } else if (parsed.type === "token") {
+                            // Append token and update UI instantly
+                            fullAnswer += parsed.content;
+                            textElement.textContent = fullAnswer; // Using textContent for safe text rendering
+                            scrollToBottom();
+                        } else if (parsed.type === "error") {
+                            textElement.textContent = "Error: " + parsed.content;
+                        }
+                    } catch (err) {
+                        // Ignore partial JSON fragments across chunks
+                    }
+                }
+            }
+        }
 
       } catch (error) {
         removeLoadingIndicator();
-        appendAiMessage("Error connecting to the registrar service. Please ensure the backend server is running.");
+        appendErrorMessage("Error connecting to the registrar service. Please ensure the backend server is running.");
         console.error("API Request Failed:", error);
       } finally {
         sendBtn.disabled = false;
