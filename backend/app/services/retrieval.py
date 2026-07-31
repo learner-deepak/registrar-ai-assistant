@@ -1,54 +1,54 @@
 import sys
 import os
 
-# Ensure Python can find the 'app' module relative to the backend root directory
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from app.db.vector_store import get_vector_store
+from langchain.retrievers import EnsembleRetriever
+from langchain_community.retrievers import BM25Retriever
 
-def get_document_retriever(k_results: int = 10):
+def perform_search(query: str, k: int = 5):
     """
-    Creates a LangChain retriever that searches our ChromaDB database.
-    k_results: The number of document chunks to return (default is top 10).
+    Performs a Hybrid Search using both Vector (Chroma) and Keyword (BM25) search.
+    Returns a combined, deduplicated, and re-ranked list of top document chunks.
     """
-    vector_store = get_vector_store()
+    db = get_vector_store()
     
-    retriever = vector_store.as_retriever(
-        search_type="mmr",  # Changed from "similarity" to "mmr"
-        search_kwargs={
-            "k": 10, 
-            "fetch_k": 30   # Fetches 30 chunks, then picks the 10 most diverse ones
-        }
+    # 1. Setup the Vector Retriever (Semantic Meaning)
+    vector_retriever = db.as_retriever(search_kwargs={"k": k})
+    
+    # 2. Setup the BM25 Retriever (Keyword/Alphanumeric Matching)
+    # We load the docs directly from the vector store's underlying collection to build the BM25 index
+    collection_data = db.get()
+    
+    # Reconstruct the documents so Langchain's BM25 wrapper can read them
+    from langchain_core.documents import Document
+    bm25_docs = [
+        Document(page_content=text, metadata=meta) 
+        for text, meta in zip(collection_data["documents"], collection_data["metadatas"])
+    ]
+    
+    bm25_retriever = BM25Retriever.from_documents(bm25_docs)
+    bm25_retriever.k = k  # Set number of results to fetch
+    
+    # 3. Create the Ensemble Retriever (Hybrid Fusion)
+    # weights=[0.5, 0.5] means both vector and keyword search carry equal importance
+    ensemble_retriever = EnsembleRetriever(
+        retrievers=[vector_retriever, bm25_retriever],
+        weights=[0.5, 0.5]
     )
     
-    return retriever
-
-def perform_search(query: str):
-    """
-    Takes a user question, searches the database, and returns the raw matching text chunks.
-    """
-    retriever = get_document_retriever()
-    relevant_chunks = retriever.invoke(query)
-    return relevant_chunks
-
-# ==========================================
-# TEST BLOCK: Testing the Search Engine!
-# ==========================================
-if __name__ == "__main__":
-    test_question = "Can I exit the honors track early?"
+    # 4. Fetch the fused results
+    results = ensemble_retriever.invoke(query)
     
-    try:
-        print(f"Question: '{test_question}'\n")
-        print("Searching the database...")
-        
-        results = perform_search(test_question)
-        
-        print("\n Search complete! Here are the most relevant chunks found:\n")
-        
-        for i, doc in enumerate(results):
-            print(f"--- Result {i+1} ---")
-            print(f"Source: {doc.metadata.get('source', 'Unknown')}")
-            print(f"Text: {doc.page_content}\n")
-            
-    except Exception as e:
-        print(f"\n Error during retrieval: {e}")
+    return results
+
+if __name__ == "__main__":
+    test_query = "CS-101" # A great test for hybrid search!
+    print(f"--- Testing Hybrid Search ---")
+    print(f"Query: {test_query}\n")
+    
+    docs = perform_search(test_query)
+    for i, doc in enumerate(docs):
+        print(f"Result {i+1} (Source: {doc.metadata.get('source')}):")
+        print(f"{doc.page_content[:150]}...\n")
