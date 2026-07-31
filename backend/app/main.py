@@ -1,16 +1,23 @@
 import sys
 import os
-from fastapi import FastAPI, HTTPException
+from pathlib import Path
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pathlib import Path
 from pydantic import BaseModel
 
+# --- Rate Limiting Imports ---
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # Ensure Python path includes backend root directory
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.services.rag_chain import generate_grounded_response
+
+# 1. Initialize Limiter (tracks users by client IP address)
+limiter = Limiter(key_func=get_remote_address)
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -18,6 +25,10 @@ app = FastAPI(
     description="Backend API for querying university academic guidelines and registrar policies.",
     version="1.0.0"
 )
+
+# 2. Attach Limiter to app state & register error handler for 429 responses
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Configure CORS (Cross-Origin Resource Sharing) for frontend integration
 app.add_middleware(
@@ -31,7 +42,7 @@ app.add_middleware(
 # Calculate the exact path to your data/docs folder
 DOCS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "docs"
 
-# BULLETPROOF FIX: Force create the directories if Render's server can't find them
+# Force create the directories if server can't find them
 DOCS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Mount that folder to a web URL endpoint called "/files"
@@ -55,16 +66,17 @@ def health_check():
     }
 
 @app.post("/query", response_model=QueryResponse)
-def handle_query(request: QueryRequest):
+@limiter.limit("5/minute")  # 3. Limit to 5 requests per minute per IP
+def handle_query(request: Request, body: QueryRequest):
     """
     Accepts a user query, processes it through the RAG pipeline, 
-    and returns a grounded answer with citations.
+    and returns a grounded answer with citations. Rate limited to 5 req/min.
     """
-    if not request.query.strip():
+    if not body.query.strip():
         raise HTTPException(status_code=400, detail="Query string cannot be empty.")
     
     try:
-        result = generate_grounded_response(request.query)
+        result = generate_grounded_response(body.query)
         return QueryResponse(
             answer=result["answer"],
             citations=result["citations"]
