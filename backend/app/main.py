@@ -30,10 +30,18 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Configure CORS (Cross-Origin Resource Sharing) for frontend integration
+# 3. Define allowed origins (Restricts access to only your frontend domains)
+origins = [
+    "https://ro-assistant.vercel.app/",  # Replace with your exact Vercel frontend URL
+    "http://localhost:3000",                      # React / Next.js local dev
+    "http://localhost:5173",                      # Vite local dev
+    "http://127.0.0.1:5500",                     # Live Server local dev
+]
+
+# Configure CORS for frontend integration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows requests from any frontend origin during development
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -66,7 +74,7 @@ def health_check():
     }
 
 @app.post("/query", response_model=QueryResponse)
-@limiter.limit("5/minute")  # 3. Limit to 5 requests per minute per IP
+@limiter.limit("5/minute")  # Limit to 5 requests per minute per IP
 def handle_query(request: Request, body: QueryRequest):
     """
     Accepts a user query, processes it through the RAG pipeline, 
