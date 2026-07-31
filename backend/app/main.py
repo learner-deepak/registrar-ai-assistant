@@ -32,8 +32,8 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # 3. Define allowed origins (Restricts access to only your frontend domains)
 origins = [
-    "https://ro-assistant.vercel.app/",
-    "https://registrar-ai-assistant.vercel.app",  # Replace with your exact Vercel frontend URL
+    "https://ro-assistant.vercel.app",           # ✅ Fixed: Removed trailing slash
+    "https://registrar-ai-assistant.vercel.app", 
     "http://localhost:3000",                      # React / Next.js local dev
     "http://localhost:5173",                      # Vite local dev
     "http://127.0.0.1:5500",                     # Live Server local dev
@@ -43,6 +43,7 @@ origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",  # Matches any Vercel preview URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
