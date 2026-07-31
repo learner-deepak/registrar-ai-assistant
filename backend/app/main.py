@@ -54,7 +54,7 @@ def health_check():
         "message": "Registrar AI Assistant API is operational."
     }
 
-@app.post("/api/query", response_model=QueryResponse)
+@app.post("/query", response_model=QueryResponse)
 def handle_query(request: QueryRequest):
     """
     Accepts a user query, processes it through the RAG pipeline, 
