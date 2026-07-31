@@ -1,7 +1,9 @@
 import sys
 import os
+import json
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -14,7 +16,7 @@ from slowapi.errors import RateLimitExceeded
 # Ensure Python path includes backend root directory
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from app.services.rag_chain import generate_grounded_response
+from app.services.rag_chain import stream_grounded_response
 
 # 1. Initialize Limiter (tracks users by client IP address)
 limiter = Limiter(key_func=get_remote_address)
@@ -32,7 +34,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # 3. Define allowed origins (Restricts access to only your frontend domains)
 origins = [
-    "https://ro-assistant.vercel.app",           # ✅ Fixed: Removed trailing slash
+    "https://ro-assistant.vercel.app",
     "https://registrar-ai-assistant.vercel.app", 
     "http://localhost:3000",                      # React / Next.js local dev
     "http://localhost:5173",                      # Vite local dev
@@ -62,10 +64,6 @@ app.mount("/files", StaticFiles(directory=str(DOCS_DIR)), name="files")
 class QueryRequest(BaseModel):
     query: str
 
-# Response Schema 
-class QueryResponse(BaseModel):
-    answer: str
-    citations: list[str]
 
 @app.get("/")
 def health_check():
@@ -75,24 +73,26 @@ def health_check():
         "message": "Registrar AI Assistant API is operational."
     }
 
-@app.post("/query", response_model=QueryResponse)
-@limiter.limit("5/minute")  # Limit to 5 requests per minute per IP
+
+@app.post("/query")
+@limiter.limit("5/minute")
 def handle_query(request: Request, body: QueryRequest):
     """
     Accepts a user query, processes it through the RAG pipeline, 
-    and returns a grounded answer with citations. Rate limited to 5 req/min.
+    and streams the grounded answer token-by-token using Server-Sent Events (SSE).
     """
     if not body.query.strip():
         raise HTTPException(status_code=400, detail="Query string cannot be empty.")
-    
-    try:
-        result = generate_grounded_response(body.query)
-        return QueryResponse(
-            answer=result["answer"],
-            citations=result["citations"]
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"An error occurred while processing your request: {str(e)}"
-        )
+
+    def event_generator():
+        try:
+            for item in stream_grounded_response(body.query):
+                # Format each dict as standard Server-Sent Event data
+                yield f"data: {json.dumps(item)}\n\n"
+            # Signal to the frontend that the stream is complete
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            error_payload = {"type": "error", "content": str(e)}
+            yield f"data: {json.dumps(error_payload)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

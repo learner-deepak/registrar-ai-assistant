@@ -16,23 +16,28 @@ load_dotenv()
 def get_llm():
     """
     Initializes OpenAI chat model (using gpt-4o-mini for speed and low cost).
-    Temperature is set to 0.0 to make outputs purely deterministic and factual.
+    Temperature is set to 0.2 to balance factuality with a warm tone.
     """
     return ChatOpenAI(
         model="gpt-4o-mini",
         temperature=0.2
     )
 
-def generate_grounded_response(query: str):
+def stream_grounded_response(query: str):
     """
-    Takes a user query, fetches context, and generates a polite, friendly response.
+    Takes a user query, fetches context, and YIELDS a polite, friendly response token-by-token.
     """
     # 1. Fetch relevant chunks from ChromaDB
     relevant_chunks = perform_search(query)
     
-    # Extract the text and create citations
+    # Extract the text
     context_text = "\n\n".join([doc.page_content for doc in relevant_chunks])
-    citations = [doc.metadata.get("source", "Unknown Document") for doc in relevant_chunks]
+    
+    # Create citations and deduplicate them using set()
+    citations = list(set([doc.metadata.get("source", "Unknown Document") for doc in relevant_chunks]))
+
+    # YIELD 1: Send the citations immediately before the LLM starts typing
+    yield {"type": "citations", "content": citations}
 
     # 2. Friendly System Prompt
     system_prompt = """You are a warm, highly empathetic, and proactive AI assistant for the University Registrar's Office. 
@@ -57,21 +62,23 @@ Context:
     llm = get_llm()
     chain = prompt | llm | StrOutputParser() 
 
-    # 3. Generate Response
-    response_text = chain.invoke({
+    # 3. Stream Response Token-by-Token
+    for chunk in chain.stream({
         "context": context_text,
         "question": query
-    })
-
-    return {
-        "answer": response_text,
-        "citations": citations
-    }
+    }):
+        # YIELD 2: Send each word/token as it is generated
+        yield {"type": "token", "content": chunk}
 
 if __name__ == "__main__":
-    print("--- Testing OpenAI RAG Chain ---")
+    print("--- Testing OpenAI RAG Streaming Chain ---")
     valid_query = "What is the policy for exiting the degree after 3 years?"
-    res1 = generate_grounded_response(valid_query)
     print(f"Question: {valid_query}")
-    print(f"Answer: {res1['answer']}")
-    print(f"Citations: {res1['citations']}\n")
+    
+    for item in stream_grounded_response(valid_query):
+        if item["type"] == "citations":
+            print(f"\nCitations: {item['content']}\nAnswer: ", end="")
+        elif item["type"] == "token":
+            # Print each token exactly as it arrives without line breaks
+            print(item["content"], end="", flush=True)
+    print("\n")
